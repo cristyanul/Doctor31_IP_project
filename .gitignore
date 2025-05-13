@@ -20,3 +20,6 @@ uml
 
 # Ignore any virtual environments
 venv/
+
+# Ignore input data CSV files
+*.csv
