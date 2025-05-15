@@ -1,5 +1,7 @@
 sphinx
 sphinx-rtd-theme
-pylint          # includes pyreverse
+pylint
 coverage
 pytest
+flask
+openpyxl
