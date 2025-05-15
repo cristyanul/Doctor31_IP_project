@@ -3,3 +3,8 @@ sphinx-rtd-theme
 pylint          # includes pyreverse
 coverage
 pytest
+pandas  
+numpy 
+plotly.express
+IPython.display 
+
