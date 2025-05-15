@@ -21,9 +21,24 @@ app.debug = True
 def test():
     return "Hello! Testing."
 
+# Global variables and constants
+DEFAULT_COLUMN_MAPPING = {
+    'case_id':    'id_cases',
+    'age':        'age_v',
+    'sex':        'sex_v',
+    'consent':    'agreement',
+    'weight':     'greutate',
+    'height':     'inaltime',
+    'bmi':        'IMC',
+    'date':       'data1',
+    'completed':  'finalizat',
+    'test_flag':  'testing',
+    'bmi_index':  'imcINdex'
+}
+REQUIRED_COLUMNS = list(DEFAULT_COLUMN_MAPPING.keys())
+
 data = None
-column_mappings = None
-REQUIRED_COLUMNS = ['Age', 'Weight', 'Height'] # TODO: Add more columns to his list
+column_mappings = DEFAULT_COLUMN_MAPPING.copy()
 
 @app.route('/')
 def index():
@@ -48,7 +63,7 @@ def upload_file():
             return jsonify({
                 'message': 'File uploaded successfully',
                 'columns': data.columns.tolist(),
-                'preview': data.head().to_dict('records')
+                'preview': data.head().to_dict('records')   
             })
         except Exception as e:
             return jsonify({'error': str(e)}), 400
@@ -58,13 +73,11 @@ def upload_file():
 @app.route('/map-columns', methods=['POST'])
 def map_columns():
     global column_mappings
-    mappings = request.json
-    
-    if not all(col in mappings.values() for col in REQUIRED_COLUMNS):
-        return jsonify({'error': 'All required columns must be mapped'}), 400
-    
-    column_mappings = mappings
-    return jsonify({'message': 'Column mapping successful'})
+    user_map = request.json or {}
+    if set(user_map.keys()) != set(DEFAULT_COLUMN_MAPPING.keys()):
+        return jsonify({'error':'Please map all fields'}), 400
+    column_mappings = user_map
+    return jsonify({'message':'Column mappings saved'})
 
 @app.route('/analyze', methods=['POST'])
 def analyze_data():
