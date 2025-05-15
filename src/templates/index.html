@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Docker31 Data Validation and Anomalies Detection Tool</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <!--Basic bootstrap styling-->
@@ -13,9 +15,8 @@
 </head>
 <body>
     <div class="container">
-        <h1 class="text-center mb-4">Docker31 Data Validation Tool</h1>
-        
-        <div class="card">
+        <h2 class="text-center mb-4">Docker31 Data Validation and Anomalies Detection Tool</h2>
+        <div class="card mb-3">
             <div class="card-body">
                 <h5 class="card-title">Upload CSV File</h5>
                 <form id="uploadForm" class="mb-3">
@@ -23,6 +24,14 @@
                         <input type="file" class="form-control" id="csvFile" accept=".csv" required>
                     </div>
                     <button type="submit" class="btn btn-primary">Upload and Preview</button>
+                    <button id="mapBtn"
+                            type="button"
+                            class="btn btn-secondary ms-2"
+                            disabled
+                            data-bs-toggle="offcanvas"
+                            data-bs-target="#mappingCanvas">
+                      Map Columns
+                    </button>
                 </form>
             </div>
         </div>
@@ -35,7 +44,7 @@
                     <tbody id="previewBody"></tbody>
                 </table>
             </div>
-            <button id="validateBtn" class="btn btn-success mt-3">Validate Data</button>
+            <button id="validateBtn" class="btn btn-success mt-3" disabled>Validate Data</button>
         </div>
         <!--Data validation section-->
         <div id="results" style="display: none;">
@@ -44,7 +53,6 @@
                 <table class="table table-striped">
                     <thead>
                         <tr>
-                            <!--TODO: for later, check the structure with the main app logic-->
                             <th>Row</th>
                             <th>Age Valid</th>
                             <th>Weight Valid</th>
@@ -58,65 +66,143 @@
             </div>
         </div>
     </div>
-    <!--Front-end basic JS logic-->
+    <!-- Offcanvas for Mapping -->
+    <div class="offcanvas offcanvas-end" tabindex="-1" id="mappingCanvas" aria-labelledby="mappingCanvasLabel">
+      <div class="offcanvas-header">
+        <h5 class="offcanvas-title" id="mappingCanvasLabel">Map Your Columns</h5>
+        <button type="button" class="btn-close text-reset" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+      </div>
+      <div class="offcanvas-body">
+        <form id="mappingForm">
+          <div id="mappingFields" class="row gy-2"></div>
+          <button type="submit" class="btn btn-primary mt-3">Save Mapping</button>
+        </form>
+      </div>
+    </div>
+
+    <!--Front-end basic Bootstrap JS logic-->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+        let detectedColumns = [];
+        const defaultMapping = {
+            case_id:   'id_cases',
+            age:       'age_v',
+            sex:       'sex_v',
+            consent:   'agreement',
+            weight:    'greutate',
+            height:    'inaltime',
+            bmi:       'IMC',
+            date:      'data1',
+            completed: 'finalizat',
+            test_flag: 'testing',
+            bmi_index: 'imcINdex'
+        };
+
+        // Upload CSV
+        document.getElementById('uploadForm').addEventListener('submit', async e => {
             e.preventDefault();
-            const formData = new FormData();
             const fileInput = document.getElementById('csvFile');
+            if (!fileInput.files.length) return;
+            const formData = new FormData();
             formData.append('file', fileInput.files[0]);
 
             try {
-                const response = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await response.json();
-                
-                if (response.ok) {
-                    showPreview(data.preview);
-                } else {
-                    alert(data.error);
-                }
-            } catch (error) {
-                alert('Error uploading file');
+                const res  = await fetch('/upload', { method:'POST', body: formData });
+                const json = await res.json();
+                if (!res.ok) throw new Error(json.error);
+                detectedColumns = json.columns;
+                renderPreview(json.preview);
+                document.getElementById('mapBtn').disabled = false;
+            } catch (err) {
+                alert('Upload error: ' + err.message);
             }
         });
 
-        function showPreview(data) {
-            if (data.length === 0) return;
-            
-            const preview = document.getElementById('preview');
-            const header = document.getElementById('previewHeader');
-            const body = document.getElementById('previewBody');
-            
-            // Create header
-            header.innerHTML = `<tr>${Object.keys(data[0]).map(key => `<th>${key}</th>`).join('')}</tr>`;
-            
-            // Create body
-            body.innerHTML = data.map(row => 
-                `<tr>${Object.values(row).map(value => `<td>${value}</td>`).join('')}</tr>`
+        // Render preview table
+        function renderPreview(data) {
+            if (!data.length) return;
+            document.getElementById('previewHeader').innerHTML = `
+                <tr>${Object.keys(data[0]).map(c => `<th>${c}</th>`).join('')}</tr>`;
+            document.getElementById('previewBody').innerHTML = data.map(r =>
+                `<tr>${Object.values(r).map(v => `<td>${v}</td>`).join('')}</tr>`
             ).join('');
-            
-            preview.style.display = 'block';
+            document.getElementById('preview').style.display = 'block';
         }
 
-        document.getElementById('validateBtn').addEventListener('click', async () => {
+        // Populate offcanvas when mapping panel opens
+        document.getElementById('mappingCanvas')
+            .addEventListener('show.bs.offcanvas', () => {
+            const container = document.getElementById('mappingFields');
+            container.innerHTML = '';
+            Object.entries(defaultMapping).forEach(([key, def]) => {
+                container.insertAdjacentHTML('beforeend', `
+                  <div class="col-md-6">
+                    <label class="form-label">${key}</label>
+                    <select class="form-select" name="${key}">
+                      ${detectedColumns.map(col =>
+                          `<option value="${col}" ${col===def?'selected':''}>${col}</option>`
+                       ).join('')}
+                    </select>
+                  </div>
+                `);
+            });
+        });
+
+        // Save column mapping
+        document.getElementById('mappingForm').addEventListener('submit', async e => {
+            e.preventDefault();
+            const payload = {};
+            new FormData(e.target).forEach((v,k) => payload[k] = v);
+
             try {
-                const response = await fetch('/validate', {
-                    method: 'POST'
+                const res  = await fetch('/map-columns', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
                 });
-                const results = await response.json();
-                
-                if (response.ok) {
-                    showResults(results);
-                } else {
-                    alert(results.error);
-                }
-            } catch (error) {
-                alert('Error validating data');
+                const json = await res.json();
+                if (!res.ok) throw new Error(json.error);
+
+                // hide offcanvas
+                const off = bootstrap.Offcanvas.getInstance(
+                    document.getElementById('mappingCanvas')
+                );
+                off.hide();
+
+                alert('Column mappings saved!');
+                const btn = document.getElementById('validateBtn');
+                if (btn) btn.disabled = false;
+            } catch (err) {
+                alert('Mapping error: ' + err.message);
             }
         });
+
+        // Analyze and validate data
+        document.getElementById('validateBtn').addEventListener('click', async () => {
+            try {
+                const res  = await fetch('/analyze', { method:'POST' });
+                const json = await res.json();
+                if (!res.ok) throw new Error(json.error);
+                renderResults(json.validation_results);
+            } catch (err) {
+                alert('Validation error: ' + err.message);
+            }
+        });
+
+        // Show results
+        function renderResults(results) {
+            document.getElementById('resultsBody').innerHTML = results.map(r => `
+                <tr>
+                  <td>${r.row}</td>
+                  <td class="${r.age_valid  ? 'valid':'invalid'}">${r.age_valid}</td>
+                  <td class="${r.weight_valid?'valid':'invalid'}">${r.weight_valid}</td>
+                  <td class="${r.height_valid?'valid':'invalid'}">${r.height_valid}</td>
+                  <td>${r.bmi}</td>
+                  <td class="${r.bmi_valid?'valid':'invalid'}">${r.bmi_valid}</td>
+                </tr>
+            `).join('');
+            document.getElementById('results').style.display = 'block';
+        }
     </script>
 </body>
 </html>
