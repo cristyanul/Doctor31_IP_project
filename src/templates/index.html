@@ -5,12 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Docker31 Data Validation and Anomalies Detection Tool</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!--Basic bootstrap styling-->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         .container { max-width: 960px; margin-top: 2rem; }
         #results { margin-top: 2rem; }
-        .invalid { color: red; }
-        .valid { color: green; }
+        .row-valid { background: #d4edda !important; }
+        .row-anomaly, .row-invalid { background: #f8d7da !important; }
+        .row-suspicious { background: #fff3cd !important; }
+        #resultsWindow, #previewWindow {
+            max-width: 100%;
+            min-width: 200px;
+            max-height: 320px;
+            min-height: 140px;
+            overflow: auto;
+            border: 1.5px solid #eee;
+            border-radius: 0.5rem;
+            margin-bottom: 2rem;
+            background: #fcfcfc;
+        }
+        #resultsTable, #previewTable { min-width: 700px; }
     </style>
 </head>
 <body>
@@ -27,7 +40,7 @@
                     <button id="mapBtn"
                             type="button"
                             class="btn btn-secondary ms-2"
-                            disabled
+                            style="display:none;"
                             data-bs-toggle="offcanvas"
                             data-bs-target="#mappingCanvas">
                       Map Columns
@@ -35,38 +48,25 @@
                 </form>
             </div>
         </div>
-        <!--Preview section-->
         <div id="preview" class="mt-4" style="display: none;">
             <h3>Data Preview</h3>
-            <div class="table-responsive">
-                <table class="table table-striped">
-                    <thead id="previewHeader"></thead>
-                    <tbody id="previewBody"></tbody>
-                </table>
+            <div id="previewWindow" class="table-responsive">
+                <table class="table table-striped" id="previewTable"></table>
             </div>
             <button id="validateBtn" class="btn btn-success mt-3" disabled>Validate Data</button>
         </div>
-        <!--Data validation section-->
         <div id="results" style="display: none;">
-            <h3>Validation Results</h3>
-            <div class="table-responsive">
-                <table class="table table-striped">
-                    <thead>
-                        <tr>
-                            <th>Row</th>
-                            <th>Age Valid</th>
-                            <th>Weight Valid</th>
-                            <th>Height Valid</th>
-                            <th>BMI</th>
-                            <th>BMI Valid</th>
-                        </tr>
-                    </thead>
-                    <tbody id="resultsBody"></tbody>
-                </table>
+            <h3>Validation & Anomaly Detection Results</h3>
+            <div id="resultsWindow">
+                <table class="table table-striped" id="resultsTable"></table>
             </div>
         </div>
+        <div id="analysis" style="display:none; margin-top:2rem;">
+            <h3>Summary</h3>
+            <div id="percent" class="mb-2"></div>
+            <canvas id="summaryChart" width="400" height="200"></canvas>
+        </div>
     </div>
-    <!-- Offcanvas for Mapping -->
     <div class="offcanvas offcanvas-end" tabindex="-1" id="mappingCanvas" aria-labelledby="mappingCanvasLabel">
       <div class="offcanvas-header">
         <h5 class="offcanvas-title" id="mappingCanvasLabel">Map Your Columns</h5>
@@ -79,8 +79,6 @@
         </form>
       </div>
     </div>
-
-    <!--Front-end basic Bootstrap JS logic-->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         let detectedColumns = [];
@@ -98,62 +96,50 @@
             bmi_index: 'imcINdex'
         };
 
-        // Upload CSV
+        // Upload CSV and open mapping immediately
         document.getElementById('uploadForm').addEventListener('submit', async e => {
             e.preventDefault();
             const fileInput = document.getElementById('csvFile');
             if (!fileInput.files.length) return;
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
-
             try {
                 const res  = await fetch('/upload', { method:'POST', body: formData });
                 const json = await res.json();
                 if (!res.ok) throw new Error(json.error);
                 detectedColumns = json.columns;
-                renderPreview(json.preview);
-                document.getElementById('mapBtn').disabled = false;
+                // Open mapping canvas automatically
+                document.getElementById('mapBtn').style.display = 'none';
+                const mappingCanvas = new bootstrap.Offcanvas(document.getElementById('mappingCanvas'));
+                mappingCanvas.show();
+                // Populate mapping fields
+                const container = document.getElementById('mappingFields');
+                container.innerHTML = '';
+                Object.entries(defaultMapping).forEach(([key, def]) => {
+                    container.insertAdjacentHTML('beforeend', `
+                      <div class="col-md-6">
+                        <label class="form-label">${key}</label>
+                        <select class="form-select" name="${key}">
+                          ${detectedColumns.map(col =>
+                              `<option value="${col}" ${col===def?'selected':''}>${col}</option>`
+                           ).join('')}
+                        </select>
+                      </div>
+                    `);
+                });
+                // Hide preview until mapping is saved
+                document.getElementById('preview').style.display = 'none';
+                document.getElementById('validateBtn').disabled = true;
             } catch (err) {
                 alert('Upload error: ' + err.message);
             }
         });
 
-        // Render preview table
-        function renderPreview(data) {
-            if (!data.length) return;
-            document.getElementById('previewHeader').innerHTML = `
-                <tr>${Object.keys(data[0]).map(c => `<th>${c}</th>`).join('')}</tr>`;
-            document.getElementById('previewBody').innerHTML = data.map(r =>
-                `<tr>${Object.values(r).map(v => `<td>${v}</td>`).join('')}</tr>`
-            ).join('');
-            document.getElementById('preview').style.display = 'block';
-        }
-
-        // Populate offcanvas when mapping panel opens
-        document.getElementById('mappingCanvas')
-            .addEventListener('show.bs.offcanvas', () => {
-            const container = document.getElementById('mappingFields');
-            container.innerHTML = '';
-            Object.entries(defaultMapping).forEach(([key, def]) => {
-                container.insertAdjacentHTML('beforeend', `
-                  <div class="col-md-6">
-                    <label class="form-label">${key}</label>
-                    <select class="form-select" name="${key}">
-                      ${detectedColumns.map(col =>
-                          `<option value="${col}" ${col===def?'selected':''}>${col}</option>`
-                       ).join('')}
-                    </select>
-                  </div>
-                `);
-            });
-        });
-
-        // Save column mapping
+        // Save mapping, then show mapped preview
         document.getElementById('mappingForm').addEventListener('submit', async e => {
             e.preventDefault();
             const payload = {};
             new FormData(e.target).forEach((v,k) => payload[k] = v);
-
             try {
                 const res  = await fetch('/map-columns', {
                     method: 'POST',
@@ -162,46 +148,80 @@
                 });
                 const json = await res.json();
                 if (!res.ok) throw new Error(json.error);
-
-                // hide offcanvas
                 const off = bootstrap.Offcanvas.getInstance(
                     document.getElementById('mappingCanvas')
                 );
                 off.hide();
-
-                alert('Column mappings saved!');
-                const btn = document.getElementById('validateBtn');
-                if (btn) btn.disabled = false;
+                // After mapping, get preview with mapped columns
+                const previewRes = await fetch('/preview', { method: 'POST' });
+                const previewJson = await previewRes.json();
+                if (!previewRes.ok) throw new Error(previewJson.error);
+                renderPreviewTable(previewJson.preview, 'previewTable');
+                document.getElementById('preview').style.display = 'block';
+                document.getElementById('validateBtn').disabled = false;
+                // Hide results and analysis if mapping is changed again
+                document.getElementById('results').style.display = 'none';
+                document.getElementById('analysis').style.display = 'none';
             } catch (err) {
                 alert('Mapping error: ' + err.message);
             }
         });
 
-        // Analyze and validate data
+        // Validate Data = Analyze + Highlight
         document.getElementById('validateBtn').addEventListener('click', async () => {
             try {
                 const res  = await fetch('/analyze', { method:'POST' });
                 const json = await res.json();
                 if (!res.ok) throw new Error(json.error);
-                renderResults(json.validation_results);
+                renderPreviewTable(json.preview, 'resultsTable');
+                document.getElementById('results').style.display = 'block';
+                showAnalysis(json);
             } catch (err) {
-                alert('Validation error: ' + err.message);
+                alert('Validation/Analysis error: ' + err.message);
             }
         });
 
-        // Show results
-        function renderResults(results) {
-            document.getElementById('resultsBody').innerHTML = results.map(r => `
-                <tr>
-                  <td>${r.row}</td>
-                  <td class="${r.age_valid  ? 'valid':'invalid'}">${r.age_valid}</td>
-                  <td class="${r.weight_valid?'valid':'invalid'}">${r.weight_valid}</td>
-                  <td class="${r.height_valid?'valid':'invalid'}">${r.height_valid}</td>
-                  <td>${r.bmi}</td>
-                  <td class="${r.bmi_valid?'valid':'invalid'}">${r.bmi_valid}</td>
-                </tr>
-            `).join('');
-            document.getElementById('results').style.display = 'block';
+        function renderPreviewTable(data, tableId) {
+            if (!data || !data.length) return;
+            const columns = Object.keys(data[0]);
+            let thead = '<thead><tr>' + columns.map(c => `<th>${c}</th>`).join('') + '</tr></thead>';
+            let tbody = '<tbody>';
+            data.forEach(row => {
+                let rowClass = '';
+                if (row.color) {
+                    if (row.color === 'red') rowClass = 'row-anomaly row-invalid';
+                    else if (row.color === 'lightgreen') rowClass = 'row-valid';
+                }
+                tbody += `<tr class="${rowClass}">`;
+                columns.forEach(col => tbody += `<td>${row[col] ?? ''}</td>`);
+                tbody += '</tr>';
+            });
+            tbody += '</tbody>';
+            document.getElementById(tableId).innerHTML = thead + tbody;
+        }
+
+        function showAnalysis(data) {
+            if (!data.summary) { document.getElementById('analysis').style.display = 'none'; return; }
+            document.getElementById('percent').innerText =
+              `Anomaly percent: ${data.percent_anomaly}%`;
+            const summary = data.summary;
+            const ctx = document.getElementById('summaryChart').getContext('2d');
+            if(window.pieChart) window.pieChart.destroy();
+            window.pieChart = new Chart(ctx, {
+              type: 'pie',
+              data: {
+                labels: summary.map(s => s.status),
+                datasets: [{
+                  data: summary.map(s => s.count),
+                  backgroundColor: summary.map(s =>
+                    s.status === 'Anomaly' ? '#f8d7da' :
+                    s.status === 'Suspicious' ? '#fff3cd' : '#d4edda'
+                  ),
+                }]
+              },
+              options: { plugins: { legend: { display: true }} }
+            });
+            document.getElementById('analysis').style.display = 'block';
         }
     </script>
 </body>

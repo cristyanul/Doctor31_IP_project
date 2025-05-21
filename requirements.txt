@@ -5,3 +5,5 @@ coverage
 pytest
 flask
 openpyxl
+numpy
+scikit-learn
