@@ -1,27 +1,26 @@
-from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
+from flask import Flask, render_template, request, jsonify
 import pandas as pd
+import numpy as np
 import os
-from openpyxl import Workbook
-from datetime import datetime
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from src.validation import run_validations
+from src.log_config import setup_logger
+logger = setup_logger()
 
-# Paths update
 current_dir = os.path.dirname(os.path.abspath(__file__))
 template_dir = os.path.join(current_dir, 'templates')
 static_dir = os.path.join(current_dir, 'static')
-
 os.makedirs(static_dir, exist_ok=True)
 
-# Flask app setup
-app = Flask(__name__, 
-           template_folder=template_dir,
-           static_folder=static_dir)
+app = Flask(__name__,
+            template_folder=template_dir,
+            static_folder=static_dir)
 app.debug = True
 
-@app.route('/help')
-def test():
-    return "Hello! Testing."
-
-# Global variables and constants
 DEFAULT_COLUMN_MAPPING = {
     'case_id':    'id_cases',
     'age':        'age_v',
@@ -35,10 +34,32 @@ DEFAULT_COLUMN_MAPPING = {
     'test_flag':  'testing',
     'bmi_index':  'imcINdex'
 }
-REQUIRED_COLUMNS = list(DEFAULT_COLUMN_MAPPING.keys())
 
 data = None
-column_mappings = DEFAULT_COLUMN_MAPPING.copy()
+column_mappings = None
+processed_data = None  # Store processed data to avoid reprocessing
+
+def _records_safe(df):
+    return df.replace({np.nan: None}).to_dict('records')
+
+def apply_column_mapping_and_clean(df, mappings):
+    """Apply column mapping and clean numeric columns"""
+    # Create reverse mapping (original_col -> standard_name)
+    reverse_mapping = {v: k for k, v in mappings.items() if v in df.columns}
+    
+    # Apply mapping
+    mapped_df = df.rename(columns=reverse_mapping)
+    
+    # Clean and convert numeric columns
+    numeric_cols = ['age', 'weight', 'height', 'bmi']
+    for col in numeric_cols:
+        if col in mapped_df.columns:
+            # Replace empty strings and whitespace with NaN
+            mapped_df[col] = mapped_df[col].astype(str).replace(r'^\s*$', np.nan, regex=True)
+            # Convert to numeric, coercing errors to NaN
+            mapped_df[col] = pd.to_numeric(mapped_df[col], errors='coerce')
+    
+    return mapped_df
 
 @app.route('/')
 def index():
@@ -46,93 +67,200 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    """
-    Handle CSV file upload, parse it, return column info and preview.
-    """
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
-    
     file = request.files['file']
     if file.filename == '':
         return jsonify({'error': 'No file selected'}), 400
-    
     if file and file.filename.endswith('.csv'):
         try:
-            global data
+            global data, column_mappings, processed_data
             data = pd.read_csv(file)
+            colnames = data.columns.tolist()
+            column_mappings = None
+            processed_data = None  # Reset processed data
             return jsonify({
                 'message': 'File uploaded successfully',
-                'columns': data.columns.tolist(),
-                'preview': data.head().to_dict('records')   
+                'columns': colnames
             })
         except Exception as e:
             return jsonify({'error': str(e)}), 400
-    
     return jsonify({'error': 'Invalid file type'}), 400
 
 @app.route('/map-columns', methods=['POST'])
 def map_columns():
-    global column_mappings
+    global column_mappings, processed_data
     user_map = request.json or {}
     if set(user_map.keys()) != set(DEFAULT_COLUMN_MAPPING.keys()):
-        return jsonify({'error':'Please map all fields'}), 400
+        return jsonify({'error': 'You must map all fields.'}), 400
     column_mappings = user_map
-    return jsonify({'message':'Column mappings saved'})
+    processed_data = None  # Reset processed data when mappings change
+    return jsonify({'message': 'Column mappings saved'})
 
-@app.route('/analyze', methods=['POST'])
-def analyze_data():
-    """
-    Rename columns, perform validations and model predictions, then generate report.
-    """
+@app.route('/preview', methods=['POST'])
+def preview_data_route():
+    global data, column_mappings, processed_data
     if data is None or column_mappings is None:
         return jsonify({'error': 'No data or column mappings available'}), 400
-    
     try:
-        mapped_data = data.rename(columns={v: k for k, v in column_mappings.items()})
-
-        # Placeholders
-        # TODO: developer logic for validation and developer the ML model
-        validation_results = []
-        model_results = []
-
-        # Generate report
-        report_path = generate_report(mapped_data, validation_results, model_results)
+        # Process data if not already done
+        if processed_data is None:
+            processed_data = apply_column_mapping_and_clean(data, column_mappings)
         
-        return jsonify({
-            'message': 'Analysis complete',
-            'validation_results': validation_results,
-            'report_path': report_path
-        })
-    
+        preview = _records_safe(processed_data.head(200))
+        return jsonify({'preview': preview})
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
-def generate_report(data, validation_results, model_results):
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    excel_path = f'reports/analysis_report_{timestamp}.xlsx'
-    
-    # Checks dir
-    os.makedirs('reports', exist_ok=True)
-    
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Analysis Report"
-    
-    # Add headers
-    headers = ['Row', 'Age', 'Weight']
-    ws.append(headers)
-    
-    # TODO: Develop logic for report generation
+@app.route('/analyze', methods=['POST'])
+def analyze_data():
+    global data, column_mappings, processed_data
+    if data is None or column_mappings is None:
+        return jsonify({'error': 'No data or column mappings available'}), 400
 
-    wb.save(excel_path)
-    return excel_path
+    try:
+        # Process data if not already done or reuse existing processed data
+        if processed_data is None:
+            processed_data = apply_column_mapping_and_clean(data, column_mappings)
+        
+        # Create a copy for analysis to avoid modifying the original
+        analysis_df = processed_data.copy()
+        
+        # Debug: Check what columns we have
+        logger.debug(f"Available columns after mapping: {analysis_df.columns.tolist()}")
+        
+        # Required columns for anomaly detection
+        required_cols = ['age', 'weight', 'height', 'bmi']
+        
+        # Check which columns are actually available
+        available_cols = [col for col in required_cols if col in analysis_df.columns]
+        missing_cols = [col for col in required_cols if col not in analysis_df.columns]
+        
+        logger.debug(f"Available required columns: {available_cols}")
+        logger.debug(f"Missing required columns: {missing_cols}")
+        
+        if not available_cols:
+            return jsonify({
+                'error': f'None of the required columns ({required_cols}) are available after mapping. Available columns: {analysis_df.columns.tolist()}'
+            }), 400
+        
+        # Initialize analysis columns
+        analysis_df['isolation_score'] = np.nan
+        analysis_df['anomaly'] = np.nan
+        analysis_df['status'] = 'Not analyzed'
+        analysis_df['color'] = '#e0e0e0'
+        
+        # Debug: Check data quality for available columns
+        for col in available_cols:
+            logger.debug(f"Column '{col}' - Data type: {analysis_df[col].dtype}")
+            logger.debug(f"Column '{col}' - Non-null count: {analysis_df[col].count()}/{len(analysis_df)}")
+            logger.debug(f"Column '{col}' - Sample values: {analysis_df[col].dropna().head().tolist()}")
+            logger.debug(f"Column '{col}' - Value counts: {analysis_df[col].value_counts().head()}")
+            logger.debug("---")
+        
+        # Use only available columns for analysis
+        feature_data = analysis_df[available_cols].copy()
+        
+        # Check for complete cases
+        complete_mask = feature_data.notna().all(axis=1)
+        complete_data = feature_data[complete_mask]
+        
+        logger.debug(f"Total rows: {len(analysis_df)}")
+        logger.debug(f"Complete rows for analysis: {len(complete_data)}")
+        
+        # If we have less than 2 complete rows, try with partial data
+        if len(complete_data) < 2:
+            logger.debug("Not enough complete cases, trying with partial data...")
+            # Try with rows that have at least 2 non-null values
+            partial_mask = feature_data.count(axis=1) >= 2
+            partial_data = feature_data[partial_mask].fillna(feature_data.mean())
+            
+            logger.debug(f"Rows with at least 2 non-null values: {len(partial_data)}")
+            
+            if len(partial_data) >= 2:
+                complete_data = partial_data
+                complete_mask = partial_mask
+                logger.debug("Using partial data with mean imputation")
+        
+        if len(complete_data) >= 2:
+            # Scale the features
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(complete_data)
+            
+            # Fit isolation forest
+            isolation_forest = IsolationForest(
+                contamination=0.1, 
+                random_state=42,
+                n_estimators=100
+            )
+            
+            # Get predictions and scores
+            anomaly_predictions = isolation_forest.fit_predict(X_scaled)
+            anomaly_scores = isolation_forest.decision_function(X_scaled)
+            
+            logger.debug(f"Anomaly predictions shape: {anomaly_predictions.shape}")
+            logger.debug(f"Anomaly scores shape: {anomaly_scores.shape}")
+            logger.debug(f"Complete data indices: {complete_data.index.tolist()[:10]}...")  # First 10 indices
+            
+            # Map results back to original dataframe using indices
+            complete_indices = complete_data.index
+            
+            # Round isolation scores to 3 decimal places
+            analysis_df.loc[complete_indices, 'isolation_score'] = np.round(anomaly_scores, 3)
+            analysis_df.loc[complete_indices, 'anomaly'] = anomaly_predictions
+            
+            # Update status and color based on anomaly detection
+            analysis_df.loc[analysis_df['anomaly'] == 1, 'status'] = 'Valid'
+            analysis_df.loc[analysis_df['anomaly'] == 1, 'color'] = 'lightgreen'
+            analysis_df.loc[analysis_df['anomaly'] == -1, 'status'] = 'Anomaly'
+            analysis_df.loc[analysis_df['anomaly'] == -1, 'color'] = 'red'
+            
+            logger.debug("Status value counts:")
+            logger.debug(analysis_df['status'].value_counts())
+        else:
+            logger.debug("Not enough data for anomaly detection even with partial data")
+        
+        # Create summary statistics
+        status_counts = analysis_df['status'].value_counts()
+        status_colors = {
+            'Valid': '#d1e7dd',
+            'Anomaly': '#f8d7da',
+            'Not analyzed': '#e0e0e0'
+        }
 
-@app.route('/download-report/<timestamp>')
-def download_report(timestamp):
-    report_path = f'reports/analysis_report_{timestamp}.xlsx'
-    if os.path.exists(report_path):
-        return send_file(report_path, as_attachment=True)
-    return jsonify({'error': 'Report not found'}), 404
+        summary = []
+        for status in ['Valid', 'Anomaly', 'Not analyzed']:
+            count = status_counts.get(status, 0)
+            summary.append({
+                'status': status,
+                'count': int(count),
+                'color': status_colors.get(status, '#e0e0e0')  # fallback color
+            })
+
+        # Calculate metrics
+        total_rows = len(analysis_df)
+        anomaly_count = int(status_counts.get('Anomaly', 0))
+        percent_anomaly = round(anomaly_count * 100 / total_rows, 2) if total_rows > 0 else 0
+        
+        # Prepare preview data (first 200 rows)
+        preview = _records_safe(analysis_df.head(200))
+        
+        return jsonify({
+            'message': 'Analysis complete',
+            'preview': preview,
+            'summary': summary,
+            'percent_anomaly': percent_anomaly,
+            'total_analyzed': len(complete_data) if len(complete_data) >= 2 else 0,
+            'total_rows': total_rows,
+            'available_columns': available_cols,
+            'missing_columns': missing_cols
+        })
+        
+    except Exception as e:
+        import traceback
+        logger.debug(f"Error in analyze_data: {str(e)}")
+        logger.debug(traceback.format_exc())
+        return jsonify({'error': str(e)}), 400
 
 def create_app():
     if not os.path.exists('templates'):

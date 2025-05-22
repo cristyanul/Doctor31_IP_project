@@ -23,3 +23,6 @@ venv/
 
 # Ignore input data CSV files
 *.csv
+
+# Ignore log files
+*.log
