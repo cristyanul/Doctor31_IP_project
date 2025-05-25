@@ -5,9 +5,8 @@ import os
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 import sys
-import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.validation import run_validations
+from src.validation import run_validations, validate_row
 from src.log_config import setup_logger
 logger = setup_logger()
 
@@ -44,21 +43,13 @@ def _records_safe(df):
 
 def apply_column_mapping_and_clean(df, mappings):
     """Apply column mapping and clean numeric columns"""
-    # Create reverse mapping (original_col -> standard_name)
     reverse_mapping = {v: k for k, v in mappings.items() if v in df.columns}
-    
-    # Apply mapping
     mapped_df = df.rename(columns=reverse_mapping)
-    
-    # Clean and convert numeric columns
     numeric_cols = ['age', 'weight', 'height', 'bmi']
     for col in numeric_cols:
         if col in mapped_df.columns:
-            # Replace empty strings and whitespace with NaN
             mapped_df[col] = mapped_df[col].astype(str).replace(r'^\s*$', np.nan, regex=True)
-            # Convert to numeric, coercing errors to NaN
             mapped_df[col] = pd.to_numeric(mapped_df[col], errors='coerce')
-    
     return mapped_df
 
 @app.route('/')
@@ -144,92 +135,56 @@ def analyze_data():
                 'error': f'None of the required columns ({required_cols}) are available after mapping. Available columns: {analysis_df.columns.tolist()}'
             }), 400
         
-        # Initialize analysis columns
+        # --- START: Layer 1 (classic validation rules with validate_row) ---
+        analysis_df['status'] = None
+        analysis_df['color'] = None
+        for idx, row in analysis_df.iterrows():
+            bmi = row.get("bmi")
+            age = row.get("age")
+            height = row.get("height")
+            weight = row.get("weight")
+            status, color = validate_row(bmi, age, height, weight)
+            analysis_df.at[idx, "status"] = status
+            analysis_df.at[idx, "color"] = color
+        logger.debug("Layer 1: Classic validation rules applied.")
+        # --- END: Layer 1 ---
+
+        # --- START: Layer 2 (Isolation Forest only on Layer 1 valid rows) ---
         analysis_df['isolation_score'] = np.nan
         analysis_df['anomaly'] = np.nan
-        analysis_df['status'] = 'Not analyzed'
-        analysis_df['color'] = '#e0e0e0'
-        
-        # Debug: Check data quality for available columns
-        for col in available_cols:
-            logger.debug(f"Column '{col}' - Data type: {analysis_df[col].dtype}")
-            logger.debug(f"Column '{col}' - Non-null count: {analysis_df[col].count()}/{len(analysis_df)}")
-            logger.debug(f"Column '{col}' - Sample values: {analysis_df[col].dropna().head().tolist()}")
-            logger.debug(f"Column '{col}' - Value counts: {analysis_df[col].value_counts().head()}")
-            logger.debug("---")
-        
-        # Use only available columns for analysis
-        feature_data = analysis_df[available_cols].copy()
-        
-        # Check for complete cases
-        complete_mask = feature_data.notna().all(axis=1)
-        complete_data = feature_data[complete_mask]
-        
-        logger.debug(f"Total rows: {len(analysis_df)}")
-        logger.debug(f"Complete rows for analysis: {len(complete_data)}")
-        
-        # If we have less than 2 complete rows, try with partial data
-        if len(complete_data) < 2:
-            logger.debug("Not enough complete cases, trying with partial data...")
-            # Try with rows that have at least 2 non-null values
-            partial_mask = feature_data.count(axis=1) >= 2
-            partial_data = feature_data[partial_mask].fillna(feature_data.mean())
-            
-            logger.debug(f"Rows with at least 2 non-null values: {len(partial_data)}")
-            
-            if len(partial_data) >= 2:
-                complete_data = partial_data
-                complete_mask = partial_mask
-                logger.debug("Using partial data with mean imputation")
-        
-        if len(complete_data) >= 2:
-            # Scale the features
+        valid_mask = analysis_df["status"] == "Valid"
+        valid_data = analysis_df.loc[valid_mask, available_cols].copy()
+        if len(valid_data) >= 2:
             scaler = StandardScaler()
-            X_scaled = scaler.fit_transform(complete_data)
-            
-            # Fit isolation forest
+            X_scaled = scaler.fit_transform(valid_data)
             isolation_forest = IsolationForest(
-                contamination=0.1, 
-                random_state=42,
-                n_estimators=100
+                contamination=0.1,
+                random_state=123,
+                n_estimators=200
             )
-            
-            # Get predictions and scores
             anomaly_predictions = isolation_forest.fit_predict(X_scaled)
             anomaly_scores = isolation_forest.decision_function(X_scaled)
-            
-            logger.debug(f"Anomaly predictions shape: {anomaly_predictions.shape}")
-            logger.debug(f"Anomaly scores shape: {anomaly_scores.shape}")
-            logger.debug(f"Complete data indices: {complete_data.index.tolist()[:10]}...")  # First 10 indices
-            
-            # Map results back to original dataframe using indices
-            complete_indices = complete_data.index
-            
-            # Round isolation scores to 3 decimal places
-            analysis_df.loc[complete_indices, 'isolation_score'] = np.round(anomaly_scores, 3)
-            analysis_df.loc[complete_indices, 'anomaly'] = anomaly_predictions
-            
-            # Update status and color based on anomaly detection
-            analysis_df.loc[analysis_df['anomaly'] == 1, 'status'] = 'Valid'
-            analysis_df.loc[analysis_df['anomaly'] == 1, 'color'] = 'lightgreen'
-            analysis_df.loc[analysis_df['anomaly'] == -1, 'status'] = 'Anomaly'
-            analysis_df.loc[analysis_df['anomaly'] == -1, 'color'] = 'red'
-            
-            logger.debug("Status value counts:")
-            logger.debug(analysis_df['status'].value_counts())
+            analysis_df.loc[valid_mask, 'isolation_score'] = anomaly_scores
+            analysis_df.loc[valid_mask, 'anomaly'] = anomaly_predictions
+            # Outliers detected by Isolation Forest are marked as Anomaly/red
+            outlier_idx = valid_data.index[anomaly_predictions == -1]
+            analysis_df.loc[outlier_idx, "status"] = "Anomaly"
+            analysis_df.loc[outlier_idx, "color"] = "red"
+            logger.info("Layer 2: Isolation Forest applied. Outliers marked as Anomaly.")
         else:
-            logger.debug("Not enough data for anomaly detection even with partial data")
-        
+            logger.info("Layer 2: Not enough valid rows for Isolation Forest anomaly detection.")
+        # --- END: Layer 2 ---
+
         # Create summary statistics
         status_counts = analysis_df['status'].value_counts()
         status_colors = {
             'Valid': '#d1e7dd',
             'Anomaly': '#f8d7da',
-            'Not analyzed': '#e0e0e0'
+            'Warning': '#fff3cd'
         }
 
         summary = []
-        for status in ['Valid', 'Anomaly', 'Not analyzed']:
+        for status in ['Valid', 'Anomaly', 'Not analyzed', 'Warning']:
             count = status_counts.get(status, 0)
             summary.append({
                 'status': status,
@@ -241,8 +196,10 @@ def analyze_data():
         total_rows = len(analysis_df)
         anomaly_count = int(status_counts.get('Anomaly', 0))
         percent_anomaly = round(anomaly_count * 100 / total_rows, 2) if total_rows > 0 else 0
+
+        with open("debug_status.txt", "w") as f:
+         f.write(str(analysis_df[['status', 'color']].head(10)))
         
-        # Prepare preview data (first 200 rows)
         preview = _records_safe(analysis_df.head(200))
         
         return jsonify({
@@ -250,7 +207,7 @@ def analyze_data():
             'preview': preview,
             'summary': summary,
             'percent_anomaly': percent_anomaly,
-            'total_analyzed': len(complete_data) if len(complete_data) >= 2 else 0,
+            'total_analyzed': int(valid_mask.sum()),
             'total_rows': total_rows,
             'available_columns': available_cols,
             'missing_columns': missing_cols
@@ -270,3 +227,4 @@ def create_app():
 if __name__ == '__main__':
     app = create_app()
     app.run(host='0.0.0.0', port=4000)
+
