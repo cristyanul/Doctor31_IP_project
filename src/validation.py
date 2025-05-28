@@ -1,6 +1,45 @@
 import pandas as pd
-import numpy as np
+def validate_row(bmi, age, height, weight):
+    anomaly = False
+    warning = False
 
+    # BMI
+    if bmi is None or pd.isnull(bmi):
+        anomaly = True
+    elif bmi <= 60:
+        anomaly = True
+    # valid dacă > 60
+
+    # AGE
+    if age is None or pd.isnull(age):
+        anomaly = True
+    elif age < 0 or age > 120:
+        anomaly = True
+    elif 0 <= age < 18 or (100 < age <= 120):
+        warning = True
+    # valid dacă 18 <= age <= 100
+
+    # HEIGHT
+    if height is None or pd.isnull(height):
+        anomaly = True
+    elif height < 0 or height > 220:
+        anomaly = True
+    elif 0 <= height < 150:
+        warning = True
+    # valid dacă 150 <= height <= 220
+
+    # WEIGHT
+    if weight is None or pd.isnull(weight):
+        anomaly = True
+    elif weight < 20 or weight > 300:
+        anomaly = True
+    # valid dacă 20 <= weight <= 300
+
+    if anomaly:
+        return "Anomaly", "red"
+    if warning:
+        return "Warning", "orange"
+    return "Valid", "green"
 def run_validations(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
     """
     Applies validation and anomaly logic to the standardized dataframe.
@@ -11,7 +50,7 @@ def run_validations(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
     """
     df = df.copy()
     df.columns = df.columns.str.lower()
-
+    
     # Coerce types safely
     for col in ['age', 'weight', 'height', 'bmi']:
         if col in df.columns:
@@ -38,43 +77,16 @@ def run_validations(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
 
     df.loc[valid_subset.index, 'dup_within_1h'] = dup_check
 
-    # Core validity checks
-    df['bmi_valid']    = df['bmi'].between(12, 60, inclusive='both')
-    df['age_valid']    = df['age'].between(0, 120, inclusive='both')
-    df['weight_valid'] = df['weight'].between(20, 300, inclusive='both')
-    df['height_valid'] = df['height'].between(120, 220, inclusive='both')
-
-    # Categorize BMI
-    df['bmi_cat'] = pd.cut(
-        df['bmi'],
-        bins=[0, 18.5, 25, 30, 35, np.inf],
-        labels=['underweight', 'normal', 'overweight', 'obese', 'extreme_obese']
+    df[['status', 'color']] = df.apply(
+        lambda row: pd.Series(validate_row(row.get('bmi'), row.get('age'), row.get('height'), row.get('weight'))),
+        axis=1
     )
-
-    # Elderly + obese flag
-    df['elderly_obese'] = (df['age'] > 85) & df['bmi_cat'].isin(['obese', 'extreme_obese'])
-
-    # Final status assignment
-    red_flags = ~df[['age_valid', 'weight_valid', 'height_valid', 'bmi_valid']].all(axis=1)
-    yellow_flags = df['dup_within_1h'] | df['elderly_obese']
-
-    df['status'] = np.select(
-        [red_flags, yellow_flags],
-        ['Anomaly', 'Suspicious'],
-        default='Valid'
-    )
-
-    df['color'] = df['status'].map({
-        'Valid': 'lightgreen',
-        'Suspicious': 'yellow',
-        'Anomaly': 'red'
-    })
 
     # Prepare summary for frontend
     summary = (
         df['status']
         .value_counts()
-        .reindex(['Valid', 'Suspicious', 'Anomaly'], fill_value=0)
+        .reindex(['Valid', 'Warning', 'Anomaly'], fill_value=0)
         .reset_index()
         .rename(columns={'index': 'status', 'status': 'count'})
         .to_dict(orient='records')

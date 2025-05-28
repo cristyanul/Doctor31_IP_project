@@ -1,0 +1,11 @@
+    status color
+0  Anomaly   red
+1  Anomaly   red
+2  Anomaly   red
+3  Anomaly   red
+4  Anomaly   red
+5  Anomaly   red
+6  Anomaly   red
+7  Anomaly   red
+8  Anomaly   red
+9  Anomaly   red
