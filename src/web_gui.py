@@ -6,7 +6,7 @@ from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.validation import run_validations, validate_row
+from src.validation import validate_row
 from src.log_config import setup_logger
 logger = setup_logger()
 
