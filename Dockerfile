@@ -35,12 +35,25 @@ RUN apt-get update && apt-get install -y \
  && chmod 0440 /etc/sudoers.d/$USERNAME \
  && apt-get clean
 
-# Install Python dependencies
+# Copy requirements and install dependencies
 COPY requirements.txt /tmp/requirements.txt
 RUN python3 -m pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir -r /tmp/requirements.txt \
  && pip install --no-cache-dir pdoc
 
-# Use non-root user
+# Copy entire project into container
+COPY . /workspaces/BigDataInitialSetupPython
+
+# Create logs directory and set ownership for non-root user
+RUN mkdir -p /workspaces/BigDataInitialSetupPython/src/logs \
+ && chown -R $USERNAME:$USERNAME /workspaces/BigDataInitialSetupPython/src/logs
+
+# Switch to non-root user
 USER $USERNAME
 WORKDIR /workspaces/BigDataInitialSetupPython
+
+# Expose Flask port
+EXPOSE 4000
+
+# Run the Flask app
+CMD ["python3", "src/web_gui.py"]

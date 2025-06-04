@@ -8,3 +8,4 @@ openpyxl
 numpy
 scikit-learn
 hypothesis
+pandas
