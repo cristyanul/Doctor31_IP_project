@@ -44,9 +44,10 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip \
 # Copy entire project into container
 COPY . /workspaces/BigDataInitialSetupPython
 
-# Create logs directory and set ownership for non-root user
+# Create logs and debug file, fix permissions for non-root user
 RUN mkdir -p /workspaces/BigDataInitialSetupPython/src/logs \
- && chown -R $USERNAME:$USERNAME /workspaces/BigDataInitialSetupPython/src/logs
+ && touch /workspaces/BigDataInitialSetupPython/debug_status.txt \
+ && chown -R $USERNAME:$USERNAME /workspaces/BigDataInitialSetupPython
 
 # Switch to non-root user
 USER $USERNAME
