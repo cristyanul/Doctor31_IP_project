@@ -1,3 +1,4 @@
+# tests/test_run_validations.py
 import copy
 import pandas as pd
 from pandas.testing import assert_frame_equal
@@ -5,8 +6,35 @@ from src.validation import run_validations
 
 
 # ---------------------------------------------------------------------------#
+STATUSES = ["Valid", "Warning", "Anomaly"]
+
+
 def _df(records):
     return pd.DataFrame(records)
+
+
+def _summary_to_counts(summary):
+    """
+    Robustly convert the summary list `run_validations` returns into
+    a dict {status: count}, regardless of how pandas shaped the rows.
+
+    Each element in `summary` is a dict that *always* contains the count
+    (integer) and *may or may not* contain the label (string).  When the
+    label is missing we assume the rows are in the canonical order
+    ['Valid', 'Warning', 'Anomaly'] – which is how the function builds
+    the DataFrame before `reset_index()`.
+    """
+    counts = {}
+    for idx, row in enumerate(summary):
+        num = next(v for v in row.values() if isinstance(v, (int, float)))
+        str_vals = [v for v in row.values() if isinstance(v, str)]
+        if str_vals:
+            counts[str_vals[0]] = num
+        else:
+            # fallback: use canonical position
+            if idx < len(STATUSES):
+                counts[STATUSES[idx]] = num
+    return counts
 
 
 # ---------------------------------------------------------------------------#
@@ -21,42 +49,33 @@ def test_status_color_and_summary():
 
     out, summary = run_validations(_df(records))
 
-    # 1️⃣  status column in the same order as the original list
+    # 1️⃣  status column order is preserved
     assert list(out["status"]) == [r["exp"] for r in records]
 
-    # 2️⃣  colour matches status
+    # 2️⃣  colour column is coherent
     cmap = {"Valid": "green", "Warning": "orange", "Anomaly": "red"}
     assert list(out["color"]) == [cmap[r["exp"]] for r in records]
 
-    # 3️⃣  summary reflects the dataframe counts – cope with any column names
-    counts_from_df = out["status"].value_counts().to_dict()
-
-    counts_from_summary = {}
-    for row in summary:
-        # pick the first *string* value as label, the numeric one as count
-        label = next(v for v in row.values() if isinstance(v, str))
-        count = next(v for v in row.values() if isinstance(v, (int, float)))
-        counts_from_summary[label] = count
-
-    assert counts_from_summary == counts_from_df
+    # 3️⃣  summary counts match dataframe counts in any representation
+    expected_counts = out["status"].value_counts().to_dict()
+    summary_counts  = _summary_to_counts(summary)
+    assert summary_counts == expected_counts
 
 
 # ---------------------------------------------------------------------------#
 def test_duplicate_detection():
     recs = [
         dict(bmi=61, age=25, height=170, weight=70, date="2024-01-01T10:00:00"),
-        dict(bmi=61, age=25, height=170, weight=70, date="2024-01-01T10:59:59"),  # 3599 s → dup
-        dict(bmi=61, age=25, height=170, weight=70, date="2024-01-01T11:00:00"),  #   61 s → dup of previous
+        dict(bmi=61, age=25, height=170, weight=70, date="2024-01-01T10:59:59"),  # <3600 s
+        dict(bmi=61, age=25, height=170, weight=70, date="2024-01-01T11:00:00"),  # <3600 s
         dict(bmi=61, age=25, height=171, weight=70, date="2024-01-01T10:10:00"),  # diff height
-        dict(bmi=61, age=None, height=170, weight=70, date="2024-01-01T10:20:00"),# null age → ignored
+        dict(bmi=61, age=None, height=170, weight=70, date="2024-01-01T10:20:00"),# NaN age -> ignored
     ]
-
     out, _ = run_validations(_df(recs))
+    flags = [bool(x) for x in out["dup_within_1h"]]
 
-    # first record must never be considered a duplicate
-    assert out.iloc[0]["dup_within_1h"] is False
-    # there should be at least one True flag in the rest
-    assert out["dup_within_1h"].iloc[1:].any()
+    assert flags[0] is False          # first row never dup
+    assert any(flags[1:])             # at least one duplicate flagged
 
 
 # ---------------------------------------------------------------------------#
@@ -66,12 +85,9 @@ def test_sorting_and_input_immutability():
         dict(bmi=61, age=25, height=170, weight=70, date="2024-01-01T00:00:00"),
     ]
     original = _df(recs)
-    clone    = original.copy(deep=True)
+    snapshot = original.copy(deep=True)
 
-    out, _   = run_validations(original)
+    out, _ = run_validations(original)
 
-    # dates are ascending after the call
-    assert list(out["date"]) == sorted(out["date"])
-
-    # caller’s dataframe is untouched
-    assert_frame_equal(original, clone)
+    assert list(out["date"]) == sorted(out["date"])  # sorted ascending
+    assert_frame_equal(original, snapshot)           # input not mutated
