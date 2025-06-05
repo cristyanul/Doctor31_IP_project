@@ -6,8 +6,9 @@ from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.validation import validate_row
+from src.validation import validate_row, bmi_calculated
 from src.log_config import setup_logger
+
 logger = setup_logger()
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -42,14 +43,22 @@ def _records_safe(df):
     return df.replace({np.nan: None}).to_dict('records')
 
 def apply_column_mapping_and_clean(df, mappings):
-    """Apply column mapping and clean numeric columns"""
     reverse_mapping = {v: k for k, v in mappings.items() if v in df.columns}
     mapped_df = df.rename(columns=reverse_mapping)
-    numeric_cols = ['age', 'weight', 'height', 'bmi']
-    for col in numeric_cols:
+    mapped_df.columns = mapped_df.columns.str.lower()
+    for col in ['age', 'weight', 'height', 'bmi']:
         if col in mapped_df.columns:
             mapped_df[col] = mapped_df[col].astype(str).replace(r'^\s*$', np.nan, regex=True)
             mapped_df[col] = pd.to_numeric(mapped_df[col], errors='coerce')
+    if 'date' in mapped_df.columns:
+        mapped_df['date'] = pd.to_datetime(mapped_df['date'], errors='coerce')
+        mapped_df['date'] = mapped_df['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    if 'weight' in mapped_df.columns and 'height' in mapped_df.columns:
+        mapped_df['bmi_calculated'] = mapped_df.apply(
+            lambda row: bmi_calculated(row['weight'], row['height']), axis=1)
+    else:
+        mapped_df['bmi_calculated'] = None
+    print(mapped_df[['weight', 'height', 'bmi_calculated']].head(10))  # DEBUG!
     return mapped_df
 
 @app.route('/')
@@ -135,15 +144,15 @@ def analyze_data():
                 'error': f'None of the required columns ({required_cols}) are available after mapping. Available columns: {analysis_df.columns.tolist()}'
             }), 400
         
-        # --- START: Layer 1 (classic validation rules with validate_row) ---
+         # --- START: Layer 1 (classic validation rules with validate_row) ---
         analysis_df['status'] = None
         analysis_df['color'] = None
         for idx, row in analysis_df.iterrows():
-            bmi = row.get("bmi")
+            bmi_c = row.get("bmi_calculated")
             age = row.get("age")
             height = row.get("height")
             weight = row.get("weight")
-            status, color = validate_row(bmi, age, height, weight)
+            status, color = validate_row(bmi_c, age, height, weight)
             analysis_df.at[idx, "status"] = status
             analysis_df.at[idx, "color"] = color
         logger.debug("Layer 1: Classic validation rules applied.")
@@ -168,8 +177,8 @@ def analyze_data():
             analysis_df.loc[valid_mask, 'anomaly'] = anomaly_predictions
             # Outliers detected by Isolation Forest are marked as Anomaly/red
             outlier_idx = valid_data.index[anomaly_predictions == -1]
-            analysis_df.loc[outlier_idx, "status"] = "Anomaly"
-            analysis_df.loc[outlier_idx, "color"] = "red"
+            #analysis_df.loc[outlier_idx, "status"] = "Anomaly"
+            #analysis_df.loc[outlier_idx, "color"] = "red"
             logger.info("Layer 2: Isolation Forest applied. Outliers marked as Anomaly.")
         else:
             logger.info("Layer 2: Not enough valid rows for Isolation Forest anomaly detection.")
@@ -199,6 +208,11 @@ def analyze_data():
 
         with open("debug_status.txt", "w") as f:
          f.write(str(analysis_df[['status', 'color']].head(10)))
+
+        shown_cols = ['case_id', 'weight', 'height', 'bmi_calculated','date']
+        rest_cols = [c for c in analysis_df.columns if c not in shown_cols]
+        ordered_cols = shown_cols + rest_cols
+        analysis_df = analysis_df[ordered_cols] if set(shown_cols).issubset(set(analysis_df.columns)) else analysis_df
         
         preview = _records_safe(analysis_df.head(200))
         

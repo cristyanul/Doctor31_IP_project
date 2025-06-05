@@ -318,13 +318,17 @@
       test_flag: 'testing',
       bmi_index: 'imcINdex'
     };
+    // Adăugăm bmi_calculated pentru preview și validare, plus ordonăm date, weight, height, bmi_calculated la început
     const allowedCols = [
-      "age","anomaly","bmi","bmi_index","case_id",
-      "completed","consent","date","height","status","color"
+      "date","weight","height","bmi_calculated",
+      "age","anomaly","bmi","bmi_index","case_id","completed","consent","status","color"
     ];
     function filterColumns(cols) {
       let filtered = allowedCols.filter(c => cols.includes(c));
-      return filtered.filter(c => c !== "status" && c !== "color");
+      // păstrează ordinea: date, weight, height, bmi_calculated, restul
+      let specialOrder = ["date","weight","height","bmi_calculated"];
+      let rest = filtered.filter(c => !specialOrder.includes(c));
+      return [...specialOrder.filter(c => filtered.includes(c)), ...rest];
     }
     function resetPreviewAndSummary() {
       document.getElementById('previewWindow').style.display = 'none';
