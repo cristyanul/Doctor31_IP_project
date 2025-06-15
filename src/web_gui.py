@@ -6,6 +6,9 @@ import socket
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 import sys
+import webbrowser
+import threading
+import time
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.validation import validate_row, bmi_calculated
 
@@ -336,7 +339,20 @@ def create_app():
 if __name__ == '__main__':
     try:
         port = find_free_port()
+        print(f"🚀 Doctor31 Data Validation Tool starting on port {port}")
+        print(f"🌐 Open your browser to: http://127.0.0.1:{port}")
+        
+        def open_browser():
+            time.sleep(1.5)
+            webbrowser.open(f'http://127.0.0.1:{port}')
+        
+        browser_thread = threading.Thread(target=open_browser)
+        browser_thread.daemon = True
+        browser_thread.start()
+        
         app.run(host='127.0.0.1', port=port, debug=False)
-    except RuntimeError as e:
-        print(f"Error: {e}")
-        exit(1)
+    except KeyboardInterrupt:
+        print("\n👋 Server stopped by user")
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        input("Press Enter to exit...")
