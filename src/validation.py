@@ -1,50 +1,30 @@
 import pandas as pd
 
 def bmi_calculated(weight, height):
-    if pd.isnull(weight) or pd.isnull(height) or height == 0:
+    if (pd.isnull(weight) or pd.isnull(height) or
+        height <= 0 or weight < 0):
         return None
     return weight / ((height / 100) ** 2)
 
 def validate_row(bmi, age, height, weight):
-    anomaly = False
-    warning = False
+    # Anomaly conditions (critical safety boundaries)
+    anomaly_conditions = [
+        pd.isnull(bmi) or bmi < 12 or bmi > 60,
+        pd.isnull(age) or age < 0 or age > 120,
+        pd.isnull(height) or height < 120,
+        pd.isnull(weight) or weight < 20 or weight > 300
+    ]
 
-    # BMI: 
-    if bmi is None or pd.isnull(bmi):
-        anomaly = True
-    elif bmi < 12 or bmi > 60:
-        anomaly = True
-
-    # AGE: 
-    if age is None or pd.isnull(age):
-        anomaly = True
-    elif age < 0:
-        anomaly = True
-    elif age < 18:
-        warning = True
-    elif age > 100 and age <= 120:
-        warning = True
-    elif age > 120:
-        anomaly = True
-
-    # HEIGHT:
-    if height is None or pd.isnull(height):
-        anomaly = True
-    elif height < 0:
-        anomaly = True
-    elif 0 <= height < 150:
-        warning = True
-    elif height > 220:
-        anomaly = True
-
-    # WEIGHT: 
-    if weight is None or pd.isnull(weight):
-        anomaly = True
-    elif weight < 20 or weight > 300:
-        anomaly = True
-
-    if anomaly:
+    if any(anomaly_conditions):
         return "Anomaly", "red"
-    if warning:
+
+    # Warning conditions (requires attention)
+    warning_conditions = [
+        age < 18 or age >= 100,  # Minors and elderly
+        height < 150
+    ]
+
+    if any(warning_conditions):
         return "Warning", "orange"
+
     return "Valid", "green"
